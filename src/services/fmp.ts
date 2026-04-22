@@ -1,5 +1,4 @@
 const FMP_BASE_URL = 'https://financialmodelingprep.com/stable';
-const FMP_V3_BASE_URL = 'https://financialmodelingprep.com/api/v3';
 export const API_KEY_STORAGE_KEY = 'fmp_api_key';
 const DEFAULT_API_KEY = import.meta.env.VITE_FMP_DEFAULT_API_KEY?.trim() ?? '';
 
@@ -52,25 +51,13 @@ async function fetchJson<T>(endpoint: string, params: Record<string, string>): P
     throw new Error(text || `FMP request failed: ${response.status}`);
   }
 
-  return (await response.json()) as T;
-}
-
-function isPremiumPlanError(message: string): boolean {
-  const text = message.toLowerCase();
-  return text.includes('premium query parameter') || text.includes('subscription') || text.includes('upgrade your plan');
-}
-
-async function fetchV3Json<T>(pathWithQuery: string): Promise<T> {
-  const apiKey = getApiKey();
-  const separator = pathWithQuery.includes('?') ? '&' : '?';
-  const response = await fetch(`${FMP_V3_BASE_URL}${pathWithQuery}${separator}apikey=${encodeURIComponent(apiKey)}`);
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `FMP v3 request failed: ${response.status}`);
+  const payload = (await response.json()) as unknown;
+  if (payload && typeof payload === 'object' && 'Error Message' in (payload as Record<string, unknown>)) {
+    const message = String((payload as Record<string, unknown>)['Error Message'] ?? 'FMP API error');
+    throw new Error(message);
   }
 
-  return (await response.json()) as T;
+  return payload as T;
 }
 
 export async function fetchSearch(query: string): Promise<SearchItem[]> {
@@ -78,102 +65,55 @@ export async function fetchSearch(query: string): Promise<SearchItem[]> {
     return [];
   }
 
-  let data: Array<{ symbol?: string; name?: string; exchangeShortName?: string }>;
-  try {
-    data = await fetchJson<Array<{ symbol?: string; name?: string; exchangeShortName?: string }>>('/search-name', {
-      query: query.trim()
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!isPremiumPlanError(message)) {
-      throw error;
-    }
-
-    data = await fetchV3Json<Array<{ symbol?: string; name?: string; exchangeShortName?: string }>>(
-      `/search?query=${encodeURIComponent(query.trim())}&limit=10&exchange=NASDAQ`
-    );
-  }
+  const data = await fetchJson<Array<{ symbol?: string; name?: string; exchangeShortName?: string; exchange?: string }>>(
+    '/search-name',
+    { query: query.trim() }
+  );
 
   return data
     .filter((item) => item.symbol)
     .map((item) => ({
       symbol: item.symbol ?? '',
       name: item.name ?? item.symbol ?? 'Unknown',
-      exchangeShortName: item.exchangeShortName
+      exchangeShortName: item.exchangeShortName ?? item.exchange
     }));
 }
 
 export async function fetchQuote(symbol: string): Promise<StockQuote> {
-  let data: Array<{
-    symbol?: string;
-    name?: string;
-    price?: number;
-    change?: number;
-    changesPercentage?: number;
-    timestamp?: number;
-  }>;
-
-  try {
-    data = await fetchJson<
-      Array<{
-        symbol?: string;
-        name?: string;
-        price?: number;
-        change?: number;
-        changesPercentage?: number;
-        timestamp?: number;
-      }>
-    >('/quote', { symbol: symbol.toUpperCase() });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!isPremiumPlanError(message)) {
-      throw error;
-    }
-
-    data = await fetchV3Json<
-      Array<{
-        symbol?: string;
-        name?: string;
-        price?: number;
-        change?: number;
-        changesPercentage?: number;
-        timestamp?: number;
-      }>
-    >(`/quote/${encodeURIComponent(symbol.toUpperCase())}`);
-  }
+  const data = await fetchJson<
+    Array<{
+      symbol?: string;
+      name?: string;
+      price?: number;
+      change?: number;
+      changesPercentage?: number;
+      changePercentage?: number;
+      timestamp?: number;
+    }>
+  >('/quote', { symbol: symbol.toUpperCase() });
 
   const quote = data[0];
   if (!quote?.symbol) {
     throw new Error(`No quote found for ${symbol.toUpperCase()}.`);
   }
 
+  const percent = quote.changesPercentage ?? quote.changePercentage ?? 0;
+
   return {
     symbol: quote.symbol,
     name: quote.name ?? quote.symbol,
     price: Number(quote.price ?? 0),
     change: Number(quote.change ?? 0),
-    changesPercentage: Number(quote.changesPercentage ?? 0),
+    changesPercentage: Number(percent),
     lastUpdated: quote.timestamp ? quote.timestamp * 1000 : Date.now()
   };
 }
 
 export async function fetchProfile(symbol: string): Promise<StockProfile | null> {
-  let data: Array<{ symbol?: string; companyName?: string; image?: string; website?: string; description?: string }>;
-  try {
-    data = await fetchJson<Array<{ symbol?: string; companyName?: string; image?: string; website?: string; description?: string }>>(
-      '/profile',
-      { symbol: symbol.toUpperCase() }
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!isPremiumPlanError(message)) {
-      throw error;
-    }
-
-    data = await fetchV3Json<Array<{ symbol?: string; companyName?: string; image?: string; website?: string; description?: string }>>(
-      `/profile/${encodeURIComponent(symbol.toUpperCase())}`
-    );
-  }
+  const data = await fetchJson<Array<{ symbol?: string; companyName?: string; image?: string; website?: string; description?: string }>>(
+    '/profile',
+    { symbol: symbol.toUpperCase() }
+  );
 
   const profile = data[0];
   if (!profile?.symbol) {
